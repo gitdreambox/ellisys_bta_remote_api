@@ -1,0 +1,28 @@
+# Ellisys Bluetooth Analyzer Remote Control - release archive (AI-agent index)
+
+> Automate the Ellisys analyzer/generator over the network (ZeroC Ice based): record/load traces,
+> navigate the Overview, add markers, export, and drive product-specific features. This archive
+> contains the server plugin to install, the API User Guide, sample code, the Python and C# SDKs in source form with their guides, and a cross-platform CLI. Links below are relative to
+> this archive root (paths with spaces use <angle brackets>).
+
+## Documentation
+- [Ellisys Bluetooth Analyzer Remote Control User Guide - Markdown](<Ellisys Bluetooth Analyzer Remote Control User Guide.md>): the language-neutral Remote Control API reference (usable from C++, .NET, or any Ice client). Also [HTML](<Ellisys Bluetooth Analyzer Remote Control User Guide.html>) and [PDF](<Ellisys Bluetooth Analyzer Remote Control User Guide.pdf>).
+
+## SDKs (recommended over the raw Ice API)
+- [Python SDK Guide - Markdown](<Sdk/Analysis/Python/Ellisys Analysis Automation SDK Guide (Python).md>): idiomatic, typed Python client; narrative + generated API reference. Also [HTML](<Sdk/Analysis/Python/Ellisys Analysis Automation SDK Guide (Python).html>) and [PDF](<Sdk/Analysis/Python/Ellisys Analysis Automation SDK Guide (Python).pdf>). Source tree under Sdk/Analysis/Python/.
+- [Python SDK agent guide](Sdk/Analysis/Python/ellisys_analysis_automation/llms.txt): dense usage rules + recipes (this is the package's own bundled llms.txt).
+- [C# SDK Guide - Markdown](<Sdk/Analysis/CSharp/Ellisys Analysis Automation SDK Guide (C#).md>): idiomatic, typed C# client; narrative + generated API reference. Also [HTML](<Sdk/Analysis/CSharp/Ellisys Analysis Automation SDK Guide (C#).html>) and [PDF](<Sdk/Analysis/CSharp/Ellisys Analysis Automation SDK Guide (C#).pdf>). Source tree under Sdk/Analysis/CSharp/.
+- [C# SDK agent guide](Sdk/Analysis/CSharp/Ellisys.Analysis.Automation/llms.txt): dense usage rules + recipes (this is the package's own bundled llms.txt).
+
+## AI agent skill
+- [Claude Code skill](Skill/ellisys-analysis/SKILL.md): workflow + environment bootstrap + troubleshooting for agents driving the analyzer with the Python SDK. Install by copying Skill/ellisys-analysis into your project's .claude/skills/ (or ~/.claude/skills/).
+
+## Install
+- Server plugin: Binaries/RemoteControl/EllisysAnalyzerBluetoothRemoteControlPlugin.dll (plus Ice.dll) - install into the Ellisys application.
+- CLI: Binaries/btacli/{win-x64,linux-x64,osx-x64}/ - cross-platform command-line client (see its readme.txt).
+
+## Samples
+- Samples/RemoteControl_Sample_Analyzer_ExportCSV_CSharp/
+- Samples/RemoteControl_Sample_Analyzer_ExportCSV_Python/
+- Samples/RemoteControl_Sample_BluetoothAnalyzer_CSharp/
+- Samples/RemoteControl_Sample_BluetoothAnalyzer_Python/

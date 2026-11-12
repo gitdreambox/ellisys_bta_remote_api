@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <SignAssembly>false</SignAssembly>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+	<LangVersion>11</LangVersion>
+  </PropertyGroup>
+  <PropertyGroup>
+    <AssemblyTitle>Ellisys Analyzer Remote Control Sample</AssemblyTitle>
+    <Company>Ellisys</Company>
+    <Product>Ellisys Analyzer Remote Control Sample</Product>
+    <Description>Ellisys Analyzer Remote Control Sample</Description>
+    <Copyright>Copyright © Ellisys</Copyright>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="A2dpMusicStreaming.btt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Sdk\Analysis\CSharp\Ellisys.Analysis.Automation\Ellisys.Analysis.Automation.csproj" />
+  </ItemGroup>
+</Project>

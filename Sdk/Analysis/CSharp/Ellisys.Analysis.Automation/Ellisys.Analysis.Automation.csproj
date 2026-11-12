@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net48;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <RootNamespace>Ellisys.Analysis.Automation</RootNamespace>
+    <AssemblyName>Ellisys.Analysis.Automation</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)Ellisys.Analysis.Automation.snk</AssemblyOriginatorKeyFile>
+
+    <!-- NuGet package metadata -->
+    <PackageId>Ellisys.Analysis.Automation</PackageId>
+    <Version>0.1.0</Version>
+    <Title>Ellisys Analysis Automation SDK</Title>
+    <Description>Idiomatic C# client for the Ellisys analyzer Remote Control automation API (ZeroC Ice based).</Description>
+    <Authors>Ellisys</Authors>
+    <Company>Ellisys</Company>
+    <Copyright>Copyright (c) Ellisys</Copyright>
+    <PackageLicenseExpression>GPL-2.0-only</PackageLicenseExpression>
+    <PackageProjectUrl>https://www.ellisys.com</PackageProjectUrl>
+    <PackageTags>ellisys;analyzer;remote-control;ice;bluetooth;wifi;wpan;usb;automation</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- The Generated/ Ice bindings are slice2cs output; don't fail or warn on them. -->
+    <NoWarn>$(NoWarn);CS1591;CS0809</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="zeroc.ice.net" Version="3.7.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Ellisys.Analysis.Automation.Tests" Key="0024000004800000140100000602000000240000525341310008000001000100f5dc33e5de40211e1c05723e99c627801d9973e5bada33073e598c586342aeeae154cc7d6b206a04581f2d6c92f35fd193fd76dda3c67be2bf689fb7237d9d8485a77e6448d94d85bb5a0270c598fee0903d09af9e65a76b2ac63aea811650abfef90232e45793d0503b19b998ee4572a085b5a2b01683d2e0afb404396a278f396184c346247b840e5502f68a3a44d00f44a497fd4db6c717253a199a54464c5232a8f10351954226d86402eff3e59a3b32bf1f2331d16150dc712cdcf28a64bd8174d999fd6426d8b3ea175378414fcebf4b79cfe61ed46bb16049cb328131153366ca5a065216b652d5b0d1673d385f45b492f238f5115e1fe09e867882d7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Dense single-file usage guide for AI agents; shipped in the package. -->
+    <None Include="llms.txt" Pack="true" PackagePath="" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

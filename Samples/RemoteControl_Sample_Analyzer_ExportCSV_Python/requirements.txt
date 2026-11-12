@@ -1,0 +1,6 @@
+# Install the Ellisys Analysis Automation SDK from this repository. The path is relative to THIS
+# sample directory, so run pip from here:  python -m pip install -r requirements.txt
+# The SDK brings its pinned zeroc-ice runtime and the pre-generated Slice bindings with it.
+# (For your own projects outside this archive, install from PyPI instead:
+#  python -m pip install ellisys-analysis-automation)
+-e ../../Sdk/Analysis/Python

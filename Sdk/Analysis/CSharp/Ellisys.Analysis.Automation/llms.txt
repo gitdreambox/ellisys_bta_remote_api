@@ -1,0 +1,157 @@
+# Ellisys.Analysis.Automation — C# SDK for the Ellisys analyzer Remote Control API
+
+> An idiomatic C# SDK wrapping the Ellisys analyzer automation API (ZeroC Ice 3.7 under the hood).
+> You control a running analyzer over the network: record/load traces, navigate the Overview tree,
+> add markers, export, and drive product-specific features. This file is a dense guide for AI
+> agents writing C# against the SDK — read it before generating code, and follow "Rules that
+> matter": the API is designed to make some misuse impossible, so naive patterns (e.g. "read all
+> items") throw rather than work.
+
+## Mental model
+
+- `Analyzer.Connect(host, port)` returns an `Analyzer`, an **`IDisposable`** — use `using`.
+  Everything is **synchronous** (blocking). No async API.
+- The **Overview** is a tree of items addressed by server handles. A trace can hold **millions**,
+  so the SDK never hands you a list of all children — you traverse via a **bounded cursor**.
+- Handle lifetime is tied to an **overview scope** (`using var ov = analyzer.Overview(name);`).
+  Disposing it frees the handles; using an item after its scope closed throws `ScopeClosedException`.
+- Times are **`long` picoseconds** (records also expose `TimeSpan`/seconds helpers). File paths in
+  `Load`, `StopAndSave`, `Export*` are on the **analyzer machine**, not the client.
+- Product features are **facets**: `analyzer.Bluetooth`, `.Wifi`, `.Wpan`, `.Usb30`. Accessing a
+  facet the connected analyzer doesn't support throws `NotAvailableException`.
+- No Ice type crosses the public API (the wrapped operations are the whole surface).
+
+## Rules that matter (common agent mistakes)
+
+1. **Never try to read every item.** No `.Children` list. Use `cursor.Stream()` (lazy, bounded) or
+   `cursor.StreamRecords(...)` (handle-free snapshots). `Take(n)`, `Page()`, slices are bounded;
+   `Materialize()` throws `BoundExceededException` past the cap.
+2. **Don't hold a live item across a page boundary** — the default page-release invalidates it
+   (`ScopeClosedException`). Snapshot via `StreamRecords(...)` to keep data.
+3. **A loading/recording overview is still growing.** Full traversals (`Stream`, `StreamRecords`,
+   `Walk`, `IterateChildren`, `Materialize`) throw `OverviewIncompleteException` while loading or
+   recording — unless you pass `follow: true` (tail items as they arrive) or `snapshot: true`
+   (only what exists now). Simplest: `analyzer.Load(path)` (blocks until loaded) then traverse.
+4. **Use `using`** for the analyzer and every overview scope; don't keep items/cursors past scope.
+5. **Catch `RemoteControlException`** (or its subclasses).
+6. **Don't guess Overview text — discover it first.** Descriptions and detail-report field names
+   are decoder-defined: close to, but not 1:1 with, the protocol spec (an A2DP trace says
+   `AVDTP Media Stream`, so searching `"*Streaming*"` finds nothing). Sample before scripting:
+   stream a bounded window of `.Description`s and one `.XmlReport()` (field names), then use the
+   exact discovered terms in `ov.SearchCursor(description: ...)` / `fieldName:` / `fieldValue:`.
+
+## API map
+
+Connect / lifecycle:
+- `Analyzer.Connect(host = "localhost", port = 12345) -> Analyzer` (`IDisposable`).
+- Recording: `analyzer.Recording(saveTo)` (returns `IDisposable`), `StartRecording()`,
+  `StopAndSave(path, overwrite = false)`, `AbortRecording()`, `IsRecording`.
+- Trace files: `Load(path, ...)` (blocks; throws `LoadTimeoutException`), `StartLoading(path)`,
+  `IsLoading`, `WaitUntilLoaded(...)`, `TraceFileInfo()`, `CloseTraceFile()`, `IsModified`, `SaveChanges()`.
+- Misc: `AppInfo()`, `RecordingStatus()`, `DataSources()`/`SelectDataSource()`/`SelectedDataSource()`,
+  `RunningTasks()`/`AbortRunningTask()`, `GetSettings()`/`ConfigureSettings()`, `InsertMessage(...)`,
+  `ExitApp()`, `CancelUserInteraction()`.
+
+Overview navigation:
+- `analyzer.Overviews()`, `ActiveOverview()`, `Overview(name = null) -> OverviewScope` (`IDisposable`).
+- `ov.Root -> OverviewItem`; `ov.SearchCursor(description: …, fieldName: …, fieldValue: …) -> SearchCursor`.
+- `OverviewItem`: `.Description`, `.Time`, `.TimePs`, `.Data`, `.ChildCount`, `.XmlReport(...)`,
+  `.Cursor(pageSize, prefetch, releaseMode)`, `.Child(i)`, `.IterateChildren(follow:, snapshot:)`,
+  `.Walk(maxDepth:, follow:, snapshot:)`, `.Record(...)`, `.Select()`, `.AddMarker(text, color)`.
+- `ChildCursor`: `.Stream(follow:, snapshot:)`, `.StreamRecords(fields…, follow:, snapshot:)`,
+  `.Page()`, `.Take(n)`, slicing, `.Materialize()`, `.ToTable(...)`, `.Total`, `.Position`.
+- `SearchCursor`: `.Stream()`, `.Take(n)`, `.Materialize()`, `.Found`, `.Scanned`.
+- `ItemField` enum: `Description`, `Time`, `Data`, `Xml`; `XmlFilter` for filtered Details.
+- `ItemRecord`: handle-free snapshot (`.Position`, `.Description`, `.Time`, `.TimePs`, `.Data`, `.Xml`).
+
+Protocol layers — instant per-protocol views of an overview (`ov.AvailableProtocolLayers()`,
+`ov.ProtocolLayer`, `ov.SetProtocolLayer(name)`; invalidates handles, but no background
+re-processing). To fingerprint an UNKNOWN trace: iterate `analyzer.Overviews()` and read
+`Root.ChildCount` per overview, then per protocol layer — the counts show which traffic
+(profiles/protocols) the trace contains. Restore the original layer afterwards.
+
+Overview queries — server-side filtering, the efficient way to narrow huge traces:
+- `ov.SetQuery("Item = \"AVDTP*\" && Status != \"OK\"")` filters on any overview column or Details
+  field; `ov.SetQuery("")` clears (`ov.Query` reads it back). Comparators `= != < > <= >=`;
+  comma-separated values are alternatives; `!value` is NOT; `&&`/`||`/parentheses; numbers
+  `123`/`0xABCD`/`0b0101`, ranges `7..10`; data patterns `0x[A1 ## *]` (`##` any byte, `*` any
+  rest); `RegEx("...")`; `ByteAt(Field, n)`. Multi-word field names go unquoted (`RF Channel Number >= 40`).
+- `SetQuery` **blocks by default** until the background re-filtering (a "Filtering data" running
+  task; `IsLoading` stays false) finishes; `wait: false` returns immediately — settle later with
+  `analyzer.WaitUntilIdle()`. Handles are invalidated either way. A malformed query throws
+  `OperationException`; an **unknown field name silently matches nothing** — verify names by
+  sampling items first.
+
+Markers: `analyzer.AddMarkerAtTime(timePs, text, color = MarkerColor.Yellow)`,
+`AddMarkerOnSelectedOverviewItem(text, color)`, `Markers() -> IReadOnlyList<Marker>`. Colors:
+`MarkerColor.{Yellow,Blue,Red,Green,Orange,Purple}`.
+
+Exports (paths on analyzer machine): `analyzer.Export(output, mode, options = null)`,
+`ExportDryRun(...)`, `ExportFilteredTraceTimeRange(...)`, `ExportFilteredTraceActiveOverview(...)`,
+`ExportThroughput(...)`. `mode` is `ExportMode`. Carriers: `FilteredTraceOptions`,
+`ThroughputOptions`, `BluetoothAudioOptions` (`PacketLoss = BluetoothPacketLossMode.*`),
+`BluetoothChannelsOptions`, `BluetoothAirtimeOptions`. Bad options throw `ExportOptionException`.
+
+Facets:
+- `analyzer.Bluetooth`: `ChannelSummaries()`, `Channels()`, `SpectrumRssi(timePs, ch)`,
+  `SpectrumRssiRange(from, to, ch)`, `ConfigureDeviceFilter(mode, addrs)`,
+  `AddLinkKey(a, b, key16)`, `ExportAudio(...)`, `ExportChannels(...)`, `ExportAirtime(...)`,
+  `ExportMobilePhoneData(...)`, `SplitTraceAndContinue(path)`.
+- `analyzer.Wifi`: `AddWifiKeyByApSsid(ssid, key)`, `AddWifiKeyByApMac(mac48, key)`, `ConfigureDeviceFilter(mode, addrs)`.
+- `analyzer.Wpan`: Thread/Zigbee key management (`AddThreadMasterKey`, `AddZigbeeNetworkKey`,
+  `AddZigbeeApsKey`, plus `Remove*`).
+- `analyzer.Usb30`: `ConnectLink()`, `DisconnectLink()`, `SaveUsb20Packets(path)`, `SaveUsb30Symbols(path, upstream)`.
+- `DeviceFilterMode`: `KeepAll`, `ExcludeBackground`, `KeepOnly`, `KeepInvolving`. `BluetoothBdAddr.Format(addr48)`.
+- Bluetooth workflow: a capture contains **all nearby devices**, not just the devices of interest;
+  analyzing unfiltered busy captures is inefficient. First probe the device population (the
+  Communication column of the BR/EDR **and** Low Energy overviews — there is no list-devices API
+  yet), then narrow with `ConfigureDeviceFilter(DeviceFilterMode.KeepOnly, new[] { "AA:BB:CC:DD:EE:FF" })`
+  (`KeepInvolving` in quieter environments). Addresses are longs or displayed-form strings.
+  `ConfigureDeviceFilter` blocks by default until the background re-filtering finishes
+  (`wait: false` + `analyzer.WaitUntilIdle()` to defer); re-open the overview scope afterwards.
+  `KeepAll` restores the full capture.
+
+Logic signals: `analyzer.LogicSignalsState(timePs)`, `analyzer.FindLogicSignalTransition(...)`.
+
+## Errors
+
+- `RemoteControlException` — base; catch this to catch everything.
+  - `ConnectionFailedException` — transport, or the endpoint isn't an analyzer.
+  - `OperationException` — analyzer rejected the op. Subclasses: `LoadTimeoutException`,
+    `ScopeClosedException`, `BoundExceededException`, `OverviewIncompleteException`.
+  - `NotAvailableException` — facet/feature absent on this analyzer.
+- `ExportOptionException` (an `ArgumentException`) — bad export option, client-side.
+
+## Canonical recipes
+
+```csharp
+using Ellisys.Analysis.Automation;
+
+// Connect, load, stream the first matches — bounded, safe at any trace size.
+using var analyzer = Analyzer.Connect("localhost", 12345);
+analyzer.Load(@"C:\traces\capture.btt");                  // blocks until fully loaded
+using (var ov = analyzer.Overview("BR/EDR Overview"))
+    foreach (var item in ov.Root.Cursor().Stream())
+    {
+        System.Console.WriteLine($"{item.Time}  {item.Description}");
+        if (item.TimePs > 5_000_000_000_000) break;       // 5 s
+    }
+
+// Full extract to CSV — constant memory, handle-free records.
+using (var ov = analyzer.Overview("BR/EDR Overview"))
+    foreach (var rec in ov.Root.Cursor().StreamRecords(new[] { ItemField.Time, ItemField.Description }))
+        Write(rec.TimeSeconds, rec.Description);
+
+// Process live during a capture — follow the growing overview, stop on a condition.
+using (analyzer.Recording(@"C:\traces\live.btt"))
+using (var ov = analyzer.Overview("BR/EDR Overview"))
+    foreach (var item in ov.Root.Cursor().Stream(follow: true))
+        if (item.Description.Contains("Disconnect")) break;
+```
+
+## More documentation
+
+- **User guide & API reference:** the *Ellisys Analyzer C# SDK Guide* (HTML/PDF), distributed with
+  the Ellisys analyzer Remote Control documentation; its API reference is generated from this
+  package's `///` XML comments, so it tracks the installed version.
+- **README and design notes** ship with the SDK.

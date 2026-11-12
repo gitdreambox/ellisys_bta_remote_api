@@ -1,0 +1,180 @@
+# ellisys_analysis_automation — Python SDK for the Ellisys analyzer Remote Control API
+
+> A Pythonic wrapper over the Ellisys analyzer automation API (ZeroC Ice under the hood). You
+> control a running analyzer over the network: record/load traces, navigate the Overview tree,
+> add markers, export, and drive product-specific features. This file is a dense, authoritative
+> guide for AI agents writing code against the SDK — read it before generating code, and follow
+> the "Rules that matter" section: the API is designed to make some misuse impossible, so naive
+> patterns (e.g. "read all items") will raise rather than work.
+
+## Mental model (read this first)
+
+- `connect(host, port)` returns an `Analyzer`, a **context manager**. Everything is **synchronous**
+  (blocking). No async API.
+- The **Overview** is a tree of protocol items addressed by server handles. A trace can hold
+  **millions** of items, so the SDK never hands you a list of "all children" — you traverse via a
+  **bounded cursor** that yields one `Page` at a time.
+- Handles live until released, and the only release primitive is global, so handle lifetime is
+  tied to an **`OverviewScope`** (`with analyzer.overview(name) as ov:`). Leaving the block frees
+  the handles. Using an item after its scope closed raises `ScopeClosed` before any network call.
+- Times are **picoseconds** (`int`) or `datetime.timedelta`. Item `.time` is a timedelta;
+  `.time_ps` is the int. Marker/export time args accept either.
+- File paths in `load`, `stop_and_save`, `export*` are on the **analyzer machine**, not the client.
+- Product features are on **facets**: `analyzer.bluetooth`, `.wifi`, `.wpan`, `.usb30`. Accessing a
+  facet the connected analyzer doesn't support raises `NotAvailable`.
+- No Ice type ever crosses the API (the wrapped operations are the whole surface).
+
+## Rules that matter (common agent mistakes)
+
+1. **Never try to read every item.** There is no `.children` list. Use `cursor().stream()` (lazy,
+   bounded) or `cursor().stream_records(...)` (handle-free snapshots). `take(n)`, `page()`,
+   `cursor[a:b]` are bounded; `materialize()`/`to_table()` raise `BoundExceeded` past 100k.
+2. **Don't hold a live `OverviewItem` across a page boundary.** With the default
+   `release_mode="page"`, streaming frees each page's handles, so a stashed item raises
+   `ScopeClosed`. To keep data, snapshot via `stream_records(...)` (yields `ItemRecord`) or pass
+   `cursor(release_mode="defer")`.
+3. **A loading/recording overview is still growing.** Full traversals (`stream`, `stream_records`,
+   `walk`, `iter_children`, `materialize`) raise `OverviewIncomplete` while a trace is loading or
+   recording — unless you pass `follow=True` (tail items as they arrive; `break` when done) or
+   `snapshot=True` (only what exists now). Simplest: `analyzer.load(path)` (blocks until loaded)
+   then traverse. Bounded reads (`take`/`page`/`cursor[a:b]`) are exempt.
+4. **Use the `with` blocks.** `with connect(...) as analyzer:` and `with analyzer.overview(...) as ov:`.
+   Don't keep items or cursors past their scope.
+5. **Catch `RemoteControlError`** (or its subclasses) — see Errors.
+6. **Don't guess Overview text — discover it first.** Descriptions and detail-report field names
+   are decoder-defined: close to, but not 1:1 with, the protocol spec (an A2DP trace says
+   `AVDTP Media Stream`, so searching `"*Streaming*"` finds nothing). Sample before scripting:
+   stream a bounded window of `.description`s and one `.xml_report()` (field names), then use the
+   exact discovered terms in `search_cursor(description=[...])` / `field_name=` / `field_value=`.
+   The packaged pass: `from ellisys_analysis_automation import discovery;
+   print(discovery.explore(analyzer))` — overview/layer survey, vocabulary templates, field
+   names, device population, optional `at=`/`marker=` anchoring.
+
+## API map
+
+Connect / lifecycle:
+- `connect(host="localhost", port=12345) -> Analyzer` (context manager; `.close()`).
+- Recording: `analyzer.recording(save_to)` (context manager), `start_recording()`,
+  `stop_and_save(path, overwrite=False)`, `abort_recording()`, `is_recording`.
+- Trace files: `load(path, wait=True, timeout=120.0)`, `start_loading(path)`, `is_loading`,
+  `wait_until_loaded()`, `trace_file_info()`, `close_trace_file()`, `save_changes()`, `is_modified`.
+- Misc: `app_info()`, `recording_status()`, `data_sources()`/`select_data_source()`/`selected_data_source()`,
+  `running_tasks()`/`abort_running_task()`, `get_settings()`/`configure_settings()`,
+  `insert_message(severity, msg)`, `exit_app()`, `cancel_user_interaction()`.
+
+Overview navigation:
+- `analyzer.overviews()`, `active_overview()`, `overview(name=None) -> OverviewScope` (context mgr).
+- `ov.root -> OverviewItem`; `ov.search_cursor(description=[...], field_name=[...], field_value=[...],
+  max_depth=8, result_cap=100000) -> SearchCursor`; `ov.set_query()`, `ov.set_protocol_layer()`.
+- `OverviewItem`: `.description`, `.time`, `.time_ps`, `.data`, `.child_count`, `.xml_report(fields=)`,
+  `.cursor(page_size=256, prefetch=, release_mode="page"|"defer")`, `.child(i)`,
+  `.iter_children(follow=, snapshot=)`, `.walk(max_depth=, follow=, snapshot=)`, `.record(*fields)`,
+  `.select()`, `.add_marker(text, color=)`.
+- `ChildCursor`: `.stream(follow=, snapshot=)`, `.stream_records(*fields, follow=, snapshot=)`,
+  `.page()`, `.next_page()`, `.take(n)`, `cursor[a:b]`, `.materialize()`, `.to_table(*field_names)`,
+  `.total`, `.position`, `.reset()`, `.seek(i)`.
+- `SearchCursor`: `.stream()`, `.next_window()`, `.take(n)`, `.materialize()`, `.found`, `.scanned`.
+- Fields enum `ItemField`: `DESCRIPTION`, `TIME`, `DATA`, `XML`; `XmlFilter` for filtered Details.
+- `ItemRecord`: handle-free snapshot (`.position`, `.description`, `.time`, `.time_ps`, `.data`, `.xml`).
+
+Protocol layers — instant per-protocol views of an overview (`ov.available_protocol_layers()`,
+`ov.protocol_layer`, `ov.set_protocol_layer(name)`; invalidates handles, but no background
+re-processing). To fingerprint an UNKNOWN trace: iterate `analyzer.overviews()` and read
+`ov.root.child_count` per overview, then per protocol layer — the counts show which traffic
+(profiles/protocols) the trace contains. Restore the original layer afterwards.
+
+Overview queries — server-side filtering, the efficient way to narrow huge traces:
+- `ov.set_query('Item = "AVDTP*" && Status != "OK"')` filters on any overview column or Details
+  field; `ov.set_query("")` clears. Comparators `= != < > <= >=`; comma-separated values are
+  alternatives; `!value` is NOT; `&&`/`||`/parentheses; numbers `123`/`0xABCD`/`0b0101`, ranges
+  `7..10`; data patterns `0x[A1 ## *]` (`##` any byte, `*` any rest); `RegEx("...")`;
+  `ByteAt(Field, n)`. Multi-word field names go unquoted (`RF Channel Number >= 40`).
+- `set_query` **blocks by default** until the background re-filtering (a "Filtering data"
+  running task; `is_loading` stays False) finishes; `wait=False` returns immediately — settle
+  later with `analyzer.wait_until_idle()`. Handles are invalidated either way. A malformed query
+  raises `OperationError`; an **unknown field name silently matches nothing** — verify names by
+  sampling items first.
+
+Markers: `analyzer.add_marker_at_time(time_ps, text, color=MarkerColor.YELLOW)`,
+`add_marker_on_selected_overview_item(text, color=)`, `markers() -> list[Marker]`. Colors:
+`MarkerColor.{YELLOW,BLUE,RED,GREEN,ORANGE,PURPLE}`.
+
+Exports (paths on analyzer machine): `analyzer.export(output, mode, options=)`,
+`export_dry_run(...)`, `export_filtered_trace_time_range(...)`, `export_filtered_trace_active_overview(...)`,
+`export_throughput(...)`. `mode` is an `ExportMode` (use `ExportModes.*` / `BluetoothExportModes.*`)
+or a raw string. Option carriers: `FilteredTraceOptions`, `ThroughputOptions`, `BluetoothAudioOptions`
+(`packet_loss=BluetoothPacketLossMode.*`), `BluetoothChannelsOptions`, `BluetoothAirtimeOptions`. Bad
+options raise `ExportOptionError`.
+
+Facets:
+- `analyzer.bluetooth`: `channel_summaries()`, `channels()`, `spectrum_rssi(time_ps, ch)`,
+  `spectrum_rssi_range(from, to, ch)`, `configure_device_filter(mode, addrs)`,
+  `add_link_key(a, b, key16)`, `export_audio(...)`, `export_channels(...)`, `export_airtime(...)`,
+  `export_mobile_phone_data(...)`, `split_trace_and_continue(path)`.
+- `analyzer.wifi`: `add_wifi_key_by_ap_ssid(ssid, key)`, `add_wifi_key_by_ap_mac(mac48, key)`,
+  `configure_device_filter(mode, addrs)`.
+- `analyzer.wpan`: thread/zigbee key management (`add_thread_master_key`, `add_zigbee_network_key`,
+  `add_zigbee_aps_key`, plus `remove_*`).
+- `analyzer.usb30`: `connect_link()`, `disconnect_link()`, `save_usb20_packets(path)`,
+  `save_usb30_symbols(path, upstream)`.
+- `DeviceFilterMode`: `KEEP_ALL`, `EXCLUDE_BACKGROUND`, `KEEP_ONLY`, `KEEP_INVOLVING`.
+- Bluetooth workflow: a capture contains **all nearby devices**, not just the devices of interest;
+  analyzing unfiltered busy captures is inefficient. First probe the device population (the
+  Communication column of the BR/EDR **and** Low Energy overviews — there is no list-devices API
+  yet), then narrow with `configure_device_filter(DeviceFilterMode.KEEP_ONLY, ["AA:BB:CC:DD:EE:FF",
+  ...])` (`KEEP_INVOLVING` in quieter environments). Addresses are ints or displayed-form strings.
+  `configure_device_filter` blocks by default until the background re-filtering finishes
+  (`wait=False` + `analyzer.wait_until_idle()` to defer); re-open the overview scope afterwards.
+  `KEEP_ALL` restores the full capture.
+
+Logic signals: `analyzer.logic_signals_state(time_ps)`,
+`find_logic_signal_transition(from, to, mask, transition_type=LogicSignalTransitionType.ANY)`.
+
+## Errors
+
+- `RemoteControlError` — base; catch this to catch everything.
+  - `ConnectionFailed` — transport/connection, or endpoint isn't an analyzer.
+  - `OperationError` — analyzer rejected the op. Subclasses: `LoadTimeout`, `ScopeClosed`,
+    `BoundExceeded`, `OverviewIncomplete`.
+  - `NotAvailable` — facet/feature absent on this analyzer.
+- `ExportOptionError(ValueError)` — bad export option, client-side.
+
+## Canonical recipes (correct patterns to emit)
+
+```python
+import ellisys_analysis_automation as ea
+from ellisys_analysis_automation import ItemField, MarkerColor, ExportMode
+
+# Connect, load, stream the first matches — bounded, safe at any trace size.
+with ea.connect("localhost", 12345) as analyzer:
+    analyzer.load(r"C:\traces\capture.btt")                  # blocks until fully loaded
+    with analyzer.overview("BR/EDR Overview") as ov:
+        for item in ov.root.cursor().stream():
+            print(item.time, item.description)
+            if item.time_ps > 5_000_000_000_000:             # 5 s
+                break
+
+# Full extract to CSV — constant memory, handle-free records.
+with analyzer.overview("BR/EDR Overview") as ov:
+    for rec in ov.root.cursor().stream_records(ItemField.TIME, ItemField.DESCRIPTION):
+        ...                                                  # rec.time_seconds, rec.description
+
+# Process live during a capture — follow the growing overview, stop on a condition.
+with analyzer.recording(r"C:\traces\live.btt"):
+    with analyzer.overview("BR/EDR Overview") as ov:
+        for item in ov.root.cursor().stream(follow=True):
+            if "Disconnect" in item.description:
+                break
+
+# Search and annotate.
+with analyzer.overview("BR/EDR Overview") as ov:
+    for hit in ov.search_cursor(description=["*Error*"]).stream():
+        hit.add_marker("error", color=MarkerColor.RED)
+```
+
+## More documentation
+
+- **User guide & API reference:** the *Ellisys Analyzer Python SDK Guide* (HTML/PDF), distributed
+  with the Ellisys analyzer Remote Control documentation. Its API reference is generated from the
+  same docstrings surfaced here, so it stays in sync with the installed package.
+- **README and CHANGELOG:** included with the SDK package.

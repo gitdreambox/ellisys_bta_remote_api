@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ellisys-analysis-automation"
+version = "0.1.0"
+description = "Pythonic client for the Ellisys analyzer Remote Control automation API."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-2.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "Ellisys" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+]
+# zeroc-ice is version-coupled to the pre-generated bindings under
+# ellisys_analysis_automation/_generated (regenerate them with Plugins\SliceAll.ps1 if this changes).
+dependencies = ["zeroc-ice~=3.8.2"]
+
+[project.urls]
+Homepage = "https://www.ellisys.com"
+Documentation = "https://downloads.ellisys.com/remote_api_analyzer.zip"
+
+[project.optional-dependencies]
+# pip install -e ".[test]" then run: pytest            (add -m integration for the live tests)
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["ellisys_analysis_automation"]
+
+[tool.setuptools.package-data]
+# ship the PEP 561 marker (the package is fully type-hinted) and the generated Slice bindings
+# tree (added to sys.path at runtime by _bindings.py)
+ellisys_analysis_automation = ["py.typed", "_generated/**/*.py", "llms.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: needs a live Ellisys analyzer on localhost:12345 (deselect with -m 'not integration')",
+]
